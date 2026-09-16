@@ -1,0 +1,100 @@
+import Combine
+import Foundation
+
+@MainActor
+final class FacebookAccountsViewModel: ObservableObject {
+    @Published private(set) var accounts: [FacebookAccount] = []
+    @Published var activeID: UUID? { didSet { save() } }
+    @Published private(set) var persistenceWarning: String?
+
+    private let accountsKey = "facebook.accounts.v4"
+    private let activeKey = "facebook.activeAccount.v4"
+
+    init() {
+        var shouldSave = false
+        if let data = UserDefaults.standard.data(forKey: accountsKey) {
+            do {
+                accounts = try JSONDecoder().decode([FacebookAccount].self, from: data)
+            } catch {
+                // Keep the unreadable payload intact so a future migration or support build
+                // can recover it before normal use writes a fresh account list.
+                let recoveryKey = "\(accountsKey).recovery"
+                if UserDefaults.standard.data(forKey: recoveryKey) == nil {
+                    UserDefaults.standard.set(data, forKey: recoveryKey)
+                }
+                persistenceWarning = "Saved account information could not be read. A recovery copy was preserved."
+                accounts = []
+            }
+        }
+        // Older extraction code could mistake Facebook controls such as "Edit" for
+        // the person's name. Never keep those values as account identity.
+        let invalidNames = Set(["edit", "edit profile", "profile", "your profile", "account"])
+        for index in accounts.indices {
+            if let name = accounts[index].name?.trimmingCharacters(in: .whitespacesAndNewlines),
+               invalidNames.contains(name.lowercased()) {
+                accounts[index].name = nil
+                shouldSave = true
+            }
+        }
+        activeID = UserDefaults.standard.string(forKey: activeKey).flatMap(UUID.init(uuidString:))
+        if active == nil { activeID = accounts.first?.id }
+
+        // Old versions put every account in WKWebsiteDataStore.default(). That
+        // store can contain only the session that was active most recently.
+        // Preserve it for the selected legacy account; give every other legacy
+        // entry its own empty persistent store so selecting it can never expose
+        // the active account's cookies. Those entries need one fresh login.
+        for index in accounts.indices where accounts[index].sessionID == nil && accounts[index].id != activeID {
+            accounts[index].sessionID = accounts[index].id
+            accounts[index].isLoggedIn = false
+            shouldSave = true
+        }
+        if shouldSave { save() }
+    }
+
+    var active: FacebookAccount? { accounts.first { $0.id == activeID } }
+
+    @discardableResult
+    func ensureAccount() -> FacebookAccount {
+        if let active { return active }
+        let account = FacebookAccount()
+        accounts.append(account)
+        activeID = account.id
+        save()
+        return account
+    }
+
+    func addAccount() {
+        let account = FacebookAccount()
+        accounts.append(account)
+        activeID = account.id
+        save()
+    }
+
+    func select(_ account: FacebookAccount) { activeID = account.id }
+
+    func remove(_ account: FacebookAccount) {
+        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
+        let wasActive = account.id == activeID
+        accounts.remove(at: index)
+
+        if wasActive {
+            activeID = accounts.isEmpty ? nil : accounts[min(index, accounts.count - 1)].id
+        } else {
+            save()
+        }
+    }
+
+    func updateActive(name: String?, avatarURL: URL?, isLoggedIn: Bool? = nil) {
+        guard let index = accounts.firstIndex(where: { $0.id == activeID }) else { return }
+        if let name, !name.isEmpty { accounts[index].name = name }
+        if let avatarURL { accounts[index].avatarURL = avatarURL }
+        if let isLoggedIn { accounts[index].isLoggedIn = isLoggedIn }
+        save()
+    }
+
+    private func save() {
+        if let data = try? JSONEncoder().encode(accounts) { UserDefaults.standard.set(data, forKey: accountsKey) }
+        UserDefaults.standard.set(activeID?.uuidString, forKey: activeKey)
+    }
+}
