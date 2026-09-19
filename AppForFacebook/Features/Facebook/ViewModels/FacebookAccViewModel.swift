@@ -6,10 +6,14 @@ final class FacebookAccountsViewModel: ObservableObject {
     @Published private(set) var accounts: [FacebookAccount] = []
     @Published var activeID: UUID? { didSet { save() } }
     @Published private(set) var persistenceWarning: String?
-
-    private let accountsKey = "facebook.accounts.v4"
+    static let accountsStorageKey = "facebook.accounts.v4"
+    private let accountsKey = FacebookAccountsViewModel.accountsStorageKey
     private let activeKey = "facebook.activeAccount.v4"
-
+    static var hasSavedAccounts: Bool {
+        guard let data = UserDefaults.standard.data(forKey: accountsStorageKey) else { return false }
+        return (try? JSONDecoder().decode([FacebookAccount].self, from: data))?.isEmpty == false
+    }
+    
     init() {
         var shouldSave = false
         if let data = UserDefaults.standard.data(forKey: accountsKey) {
@@ -38,12 +42,7 @@ final class FacebookAccountsViewModel: ObservableObject {
         }
         activeID = UserDefaults.standard.string(forKey: activeKey).flatMap(UUID.init(uuidString:))
         if active == nil { activeID = accounts.first?.id }
-
-        // Old versions put every account in WKWebsiteDataStore.default(). That
-        // store can contain only the session that was active most recently.
-        // Preserve it for the selected legacy account; give every other legacy
-        // entry its own empty persistent store so selecting it can never expose
-        // the active account's cookies. Those entries need one fresh login.
+       
         for index in accounts.indices where accounts[index].sessionID == nil && accounts[index].id != activeID {
             accounts[index].sessionID = accounts[index].id
             accounts[index].isLoggedIn = false

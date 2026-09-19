@@ -112,13 +112,6 @@ final class SettingsViewModel: ObservableObject {
             statusMessage = key.isEmpty ? "API key removed." : "Groq API key saved in Keychain."
         } catch {
             statusMessage = error.localizedDescription
-            let actualValue = SMAppService.mainApp.status == .enabled
-            if launchAtLogin != actualValue {
-                isReconcilingLoginItem = true
-                launchAtLogin = actualValue
-                isReconcilingLoginItem = false
-                save()
-            }
         }
     }
 

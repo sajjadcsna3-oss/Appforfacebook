@@ -9,5 +9,16 @@ extension Color {
             green: 169 / 255,
             blue: 255 / 255
         )
+    static let introductionBackground = Color(
+        red: 16 / 255,
+        green: 17 / 255,
+        blue: 20 / 255
+    )
+    static let platformBackground = Color(
+        red: 21 / 255,
+        green: 22 / 255,
+        blue: 25 / 255
+    )
+
 }
 

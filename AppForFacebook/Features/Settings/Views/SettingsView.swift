@@ -118,14 +118,6 @@ struct SettingsView: View {
             settingsCard("Privacy", icon: "Privacy", description: "Facebook credentials stay on facebook.com. WebKit stores each account's cookies in its own persistent session.") {
                 Label("Passwords never pass through this app", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
             }
-            settingsCard("Groq API", icon: "Privacy", description: "Used only by Summarize and Draft.") {
-                SecureField("Groq API key", text: $settings.groqAPIKey).textFieldStyle(.roundedBorder)
-                HStack {
-                    Text("Stored in macOS Keychain.").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Save API Key", action: settings.saveGroqAPIKey)
-                }
-            }
         case .shortcuts:
             settingsCard("Keyboard shortcuts", icon: "ShortcutsIcon", description: "Quick actions available from the Facebook window.") {
                 shortcut("Summarize", keys: "⌘J")

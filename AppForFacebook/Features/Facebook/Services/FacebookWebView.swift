@@ -105,15 +105,17 @@ struct FacebookWebView: NSViewRepresentable {
           const unread = [...document.querySelectorAll('[aria-label]')]
             .map(a => {
               const label = a.getAttribute('aria-label') || '';
-              if (!/\b(unread|new message|new notification)\b/i.test(label)) return null;
-              let path = '';
+              // Facebook also describes feed/navigation state as "new". Only
+              // the two controls whose numbers are actual unread totals belong
+              // in the app sidebar; routing arbitrary labelled links caused the
+              // Home tab's selected indicator to appear as a count of 1.
+              let path;
               if (/\b(messenger|message|chat)\b/i.test(label)) {
                 path = '/messages/t/';
               } else if (/\bnotification\b/i.test(label)) {
                 path = '/notifications/';
               } else {
-                const link = a.closest('a[href]');
-                try { path = new URL(link?.href || '', location.href).pathname.toLowerCase(); } catch {}
+                return null;
               }
               // Never invent the old fallback count of 1. A badge is exposed
               // only when Facebook publishes a numeric unread count itself.
@@ -130,6 +132,7 @@ struct FacebookWebView: NSViewRepresentable {
 
         static let accountObserverScript = #"""
         (() => {
+          if (/^\/(login|checkpoint|two_step_verification)(\/|$)/i.test(location.pathname)) return;
           let timer;
           const publish = () => {
             clearTimeout(timer);
@@ -144,10 +147,23 @@ struct FacebookWebView: NSViewRepresentable {
           publish();
         })()
         """#.replacingOccurrences(of: "__ACCOUNT_EXTRACTION__", with: accountExtractionScript)
-
+        @available(macOS 12.0, *)
+        func webView(_ webView: WKWebView,
+                     requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                     initiatedByFrame frame: WKFrameInfo,
+                     type: WKMediaCaptureType,
+                     decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+            let host = origin.host.lowercased()
+            guard host == "facebook.com" || host.hasSuffix(".facebook.com") else {
+                decisionHandler(.deny)
+                return
+            }
+            decisionHandler(.prompt) // defers to macOS's native camera/mic permission dialog
+        }
         var parent: FacebookWebView
         private var observations: [NSKeyValueObservation] = []
         private weak var observedWebView: WKWebView?
+        private var accountDetailsWorkItem: DispatchWorkItem?
 
         init(_ parent: FacebookWebView) { self.parent = parent }
 
@@ -165,6 +181,8 @@ struct FacebookWebView: NSViewRepresentable {
         func stopObserving() {
             observations.forEach { $0.invalidate() }
             observations.removeAll()
+            accountDetailsWorkItem?.cancel()
+            accountDetailsWorkItem = nil
             observedWebView = nil
         }
 
@@ -211,12 +229,18 @@ struct FacebookWebView: NSViewRepresentable {
                     self.parent.viewModel.updateLoginState(signedIn)
                 }
                 guard signedIn else { return }
-                self?.readAccountDetails(from: webView)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
-                    guard let webView else { return }
-                    self?.readAccountDetails(from: webView)
-                }
+                self?.scheduleAccountDetailsRead(from: webView)
             }
+        }
+
+        private func scheduleAccountDetailsRead(from webView: WKWebView) {
+            accountDetailsWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self, weak webView] in
+                guard let self, let webView, self.observedWebView === webView else { return }
+                self.readAccountDetails(from: webView)
+            }
+            accountDetailsWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
         }
 
         private func readAccountDetails(from webView: WKWebView) {
@@ -274,6 +298,7 @@ struct FacebookWebView: NSViewRepresentable {
                       let destination = FacebookDestination.destination(for: url) else { continue }
                 guard let count = (item["count"] as? NSNumber)?.intValue,
                       count > 0 else { continue }
+                guard destination == .messages || destination == .notifications else { continue }
                 unreadCounts[destination] = max(unreadCounts[destination] ?? 0, count)
             }
             Task { @MainActor [weak self, weak webView] in
@@ -283,54 +308,75 @@ struct FacebookWebView: NSViewRepresentable {
             }
         }
 
-        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            guard let url = action.request.url else { decisionHandler(.cancel); return }
+        func webView(_ webView: WKWebView,
+                     decidePolicyFor action: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let url = action.request.url else {
+                decisionHandler(.cancel)
+                return
+            }
+
             let scheme = url.scheme?.lowercased() ?? ""
-            if ["about", "blob"].contains(scheme) {
+
+            // Keep normal Facebook/Meta HTTPS authentication, checkpoint,
+            // consent, and redirect pages inside this same WKWebView session.
+            if ["http", "https", "about", "blob", "data"].contains(scheme) {
+                let host = url.host?.lowercased() ?? ""
+                let isFacebookHost = host == "facebook.com" || host.hasSuffix(".facebook.com")
+                let normalizedPath = url.path.lowercased()
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+                // Preserve the project's canonical Messenger route.
+                if isFacebookHost,
+                   action.targetFrame?.isMainFrame != false,
+                   normalizedPath == "messages" {
+                    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                    components?.path = "/messages/t/"
+                    if let inboxURL = components?.url, inboxURL != url {
+                        webView.load(URLRequest(
+                            url: inboxURL,
+                            cachePolicy: action.request.cachePolicy,
+                            timeoutInterval: action.request.timeoutInterval
+                        ))
+                        decisionHandler(.cancel)
+                        return
+                    }
+                }
+
+                // Facebook can use target="_blank" during login/security flows.
+                // Reuse this view so the per-account cookies/data store are retained.
+                if action.targetFrame == nil {
+                    webView.load(action.request)
+                    decisionHandler(.cancel)
+                    return
+                }
+
                 decisionHandler(.allow)
                 return
             }
-            guard scheme == "http" || scheme == "https" else {
+
+            // Non-web schemes leave the app only after an explicit user click.
+            if action.navigationType == .linkActivated {
                 NSWorkspace.shared.open(url)
-                decisionHandler(.cancel)
-                return
             }
-            let host = url.host?.lowercased() ?? ""
-            guard host == "facebook.com" || host.hasSuffix(".facebook.com") else {
-                // Facebook creates background popup/redirect requests to auxiliary domains
-                // such as fbsbx.com. Those must not unexpectedly launch Safari. Only a
-                // deliberate user click is allowed to leave the embedded browser.
-                if action.navigationType == .linkActivated {
-                    NSWorkspace.shared.open(url)
-                }
-                decisionHandler(.cancel)
-                return
-            }
-            // Facebook still links to `/messages/` in a few entry points. Keep
-            // those requests in this account's web view/data store and use the
-            // canonical full-page thread-list route.
-            if action.targetFrame?.isMainFrame != false,
-               url.path.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "messages" {
-                var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                components?.path = "/messages/t/"
-                if let inboxURL = components?.url {
-                    webView.load(URLRequest(url: inboxURL,
-                                            cachePolicy: action.request.cachePolicy,
-                                            timeoutInterval: action.request.timeoutInterval))
-                }
-                decisionHandler(.cancel)
-                return
-            }
-            if action.targetFrame == nil {
-                webView.load(action.request)
-                decisionHandler(.cancel)
-            } else {
-                decisionHandler(.allow)
-            }
+            decisionHandler(.cancel)
         }
 
-        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-            if let request = action.request as URLRequest? { webView.load(request) }
+        func webView(_ webView: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard let url = action.request.url else { return nil }
+            let scheme = url.scheme?.lowercased() ?? ""
+
+            // Do not create a second WebView for Facebook/Meta auth popups.
+            // Loading the request here keeps the same isolated account session.
+            if ["http", "https", "about", "blob", "data"].contains(scheme) {
+                webView.load(action.request)
+            } else if action.navigationType == .linkActivated {
+                NSWorkspace.shared.open(url)
+            }
+
             return nil
         }
     }

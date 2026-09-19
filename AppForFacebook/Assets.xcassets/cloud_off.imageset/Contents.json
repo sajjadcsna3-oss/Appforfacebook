@@ -1,17 +1,15 @@
 {
   "images" : [
     {
-      "filename" : "Container (38).png",
+      "filename" : "cloud_off.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
-      "filename" : "Container (38)@2x.png",
       "idiom" : "universal",
       "scale" : "2x"
     },
     {
-      "filename" : "Container (38)@3x.png",
       "idiom" : "universal",
       "scale" : "3x"
     }

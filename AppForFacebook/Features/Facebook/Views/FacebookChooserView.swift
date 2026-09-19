@@ -3,6 +3,7 @@ import SwiftUI
 struct FacebookChooserView: View {
     let openFacebook: () -> Void
 
+
     var body: some View {
         VStack(spacing: 0) {
             Text("App For Facebook")
@@ -43,6 +44,7 @@ struct FacebookChooserView: View {
             Spacer()
         }
         .padding(.horizontal, 56).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.introductionBackground)
     }
 
     private var facebookChoice: some View {
@@ -66,6 +68,7 @@ struct FacebookChooserView: View {
             Spacer()
         }
         .padding(.horizontal, 72).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.platformBackground)
     }
 
     private func benefit(_ icon: String, _ text: String) -> some View {

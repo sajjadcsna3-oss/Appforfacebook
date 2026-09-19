@@ -1,16 +1,28 @@
+import AppKit
 import SwiftUI
 
 struct RootView: View {
     @ObservedObject var settings: SettingsViewModel
     @StateObject private var accounts = FacebookAccountsViewModel()
     @StateObject private var facebook = FacebookViewModel()
+    @EnvironmentObject private var storeKit: StoreKitService
+    @EnvironmentObject private var subscriptionFlow: SubscriptionFlowCoordinator
     @State private var route: OverlayRoute?
     @State private var selectedTab: FacebookDestination = .home
     @State private var railHovered = false
-    @State private var isBrowserOpen = false
+    @State private var isBrowserOpen: Bool
     @State private var sidebarHidden = false
-    @State private var toolMessage: String?
     @State private var selectedTool: SidebarTool?
+    @State private var clearingSessionAccountID: UUID?
+    @State private var webViewGeneration = UUID()
+    @State private var preDockWindowFrame: NSRect?
+
+    init(settings: SettingsViewModel) {
+        self.settings = settings
+        _isBrowserOpen = State(initialValue: FacebookAccountsViewModel.hasSavedAccounts)
+    }
+
+    private var isPremium: Bool { storeKit.entitlementState == .premium }
 
     var body: some View {
         Group {
@@ -38,7 +50,9 @@ struct RootView: View {
                 signOut: signOut,
                 activateTool: activateTool,
                 selectedTool: selectedTool,
-                unreadCounts: facebook.unreadCounts
+                unreadCounts: facebook.unreadCounts,
+                isPremium: isPremium,
+                onUpgrade: { subscriptionFlow.openSubscription() }
             )
             .frame(width: sidebarWidth)
             .onHover { railHovered = $0 }
@@ -51,8 +65,10 @@ struct RootView: View {
                     ProgressView(value: facebook.progress).progressViewStyle(.linear).frame(height: 2)
                 }
                 ZStack {
-                    if let account = accounts.active {
-                        FacebookWebView(account: account, viewModel: facebook).id(account.id)
+                    if let account = accounts.active,
+                       clearingSessionAccountID != account.id {
+                        FacebookWebView(account: account, viewModel: facebook)
+                            .id("\(account.id.uuidString)-\(webViewGeneration.uuidString)")
                     }
                     if let error = facebook.loadError {
                         LoadErrorView(message: error, retry: facebook.reload)
@@ -96,6 +112,18 @@ struct RootView: View {
                 selectedTab = destination
             }
         }
+        .onChange(of: subscriptionFlow.premiumAction) { _, action in
+            guard let action else { return }
+            subscriptionFlow.clearPremiumAction()
+            switch action {
+            case .addAccount:
+                addAccount()
+            case .tryAI:
+                activateTool(.summarize)
+            case .dockAccount:
+                dockBesideCurrent()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { notification in
             guard let window = notification.object as? NSWindow, window == NSApp.keyWindow else { return }
             saveWindowFrame(for: accounts.activeID, window: window)
@@ -112,24 +140,35 @@ struct RootView: View {
                     .buttonStyle(.borderedProminent).padding(12)
             }
         }
-        .alert("Tools", isPresented: Binding(
-            get: { toolMessage != nil },
-            set: { if !$0 { toolMessage = nil } }
-        )) { Button("OK", role: .cancel) { toolMessage = nil } } message: {
-            Text(toolMessage ?? "")
-        }
     }
 
+    /// Summarise, Draft, Templates, Reader and Notebook are Premium tools.
+    /// Free users are routed to the existing paywall instead of the tool;
+    /// subscribed users go straight in. The Subscription entry itself is
+    /// never gated — tapping it always opens the paywall directly, whether
+    /// to upgrade, switch plans, or just see current status.
     private func activateTool(_ tool: SidebarTool) {
+        if tool == .subscription {
+            selectedTool = nil
+            if isPremium {
+                subscriptionFlow.showPremiumActivated()
+            } else {
+                subscriptionFlow.openSubscription()
+            }
+            return
+        }
+        if tool.isPremium && !isPremium {
+            subscriptionFlow.openSubscription()
+            return
+        }
         selectedTool = tool
         switch tool {
         case .summarize: route = .summary
         case .draft: route = .draft
-        case .pictureInPicture:
-            Task { toolMessage = await facebook.togglePictureInPicture(); selectedTool = nil }
         case .templates: route = .templates
         case .reader: route = .reader
         case .notebook: route = .notes
+        case .subscription: break // handled above
         case .sidebar: sidebarHidden = true; selectedTool = nil
         case .settings: route = .settings
         }
@@ -156,6 +195,10 @@ struct RootView: View {
         if wasActive { facebook.resetForAccount() }
 
         accounts.remove(account)
+        removeLocalData(for: account)
+        if settings.startupAccountID == account.id {
+            settings.startupAccountID = accounts.activeID
+        }
         if accounts.accounts.isEmpty {
             isBrowserOpen = false
             selectedTab = .home
@@ -167,9 +210,26 @@ struct RootView: View {
         }
     }
 
+    /// Side-by-side docking is a Premium feature (see SubscriptionView's
+    /// "Side-by-side panels" row), so it's gated the same way as the tools.
     private func dockBesideCurrent() {
-        guard let window = NSApp.keyWindow,
-              let screen = window.screen ?? NSScreen.main else { return }
+        guard isPremium else {
+            subscriptionFlow.openSubscription()
+            return
+        }
+        guard let window = NSApp.keyWindow else { return }
+
+        if let restoreFrame = preDockWindowFrame {
+            preDockWindowFrame = nil
+            window.setFrame(restoreFrame, display: true, animate: false)
+            saveWindowFrame(for: accounts.activeID, window: window)
+            return
+        }
+
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        saveWindowFrame(for: accounts.activeID, window: window)
+        preDockWindowFrame = window.frame
+
         let visible = screen.visibleFrame
         let gap: CGFloat = 6
         let frame = NSRect(
@@ -179,17 +239,38 @@ struct RootView: View {
             height: visible.height
         )
         window.setFrame(frame, display: true, animate: true)
-        saveWindowFrame(for: accounts.activeID, window: window)
     }
 
     private func signOut(_ account: FacebookAccount) {
-        guard account.id == accounts.activeID else { return }
+        guard account.id == accounts.activeID,
+              clearingSessionAccountID == nil else { return }
+
+        // Detach the WebView first so WebKit releases this account's data store.
+        clearingSessionAccountID = account.id
+        facebook.stopLoading()
         facebook.resetForAccount()
-        accounts.updateActive(name: account.name, avatarURL: account.avatarURL, isLoggedIn: false)
-        DispatchQueue.main.async {
-            FacebookSessionService.removeSession(for: account) { _ in
-                DispatchQueue.main.async {
+
+        // Clear the Facebook session, then remove this account from the rail.
+        removeSessionWhenAvailable(for: account) {
+            DispatchQueue.main.async {
+                removeLocalData(for: account)
+
+                if settings.startupAccountID == account.id {
+                    settings.startupAccountID = nil
+                }
+
+                accounts.remove(account)
+                clearingSessionAccountID = nil
+                webViewGeneration = UUID()
+                selectedTab = .home
+
+                if let nextAccount = accounts.active {
+                    if settings.startupAccountID == nil {
+                        settings.startupAccountID = nextAccount.id
+                    }
                     facebook.navigate(to: FacebookViewModel.homeURL)
+                } else {
+                    isBrowserOpen = false
                 }
             }
         }
@@ -211,7 +292,8 @@ struct RootView: View {
         let destination: URL
         switch settings.startup {
         case .lastSession:
-            destination = UserDefaults.standard.string(forKey: "facebook.lastURL").flatMap(URL.init(string:)) ?? FacebookViewModel.homeURL
+            let savedURL = UserDefaults.standard.string(forKey: "facebook.lastURL").flatMap(URL.init(string:))
+            destination = savedURL.flatMap(FacebookViewModel.restorableURL) ?? FacebookViewModel.homeURL
         case .home: destination = FacebookDestination.home.url
         case .messages:
             destination = settings.enabledTabs.contains(.messages)
@@ -223,8 +305,23 @@ struct RootView: View {
 
     private func updateWindowFrame(from oldID: UUID?, to newID: UUID?) {
         guard settings.rememberWindowSize, let window = NSApp.keyWindow else { return }
-        saveWindowFrame(for: oldID, window: window)
+        // Docking is window-level state. Switching accounts must not replace the
+        // docked frame or overwrite the exact frame captured for restoration.
+        guard preDockWindowFrame == nil else { return }
+        // A removed account must not have its just-deleted window state recreated
+        // by the active-account change observer.
+        if let oldID, accounts.accounts.contains(where: { $0.id == oldID }) {
+            saveWindowFrame(for: oldID, window: window)
+        }
         restoreWindowFrame(for: newID, window: window)
+    }
+
+    private func removeLocalData(for account: FacebookAccount) {
+        let accountID = account.id.uuidString
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "facebook.window.\(accountID)")
+        defaults.removeObject(forKey: "facebook.notebook.\(accountID)")
+        defaults.removeObject(forKey: "facebook.notes.\(accountID)")
     }
 
     private func restoreWindowFrame(for accountID: UUID?, window: NSWindow? = NSApp.keyWindow) {
@@ -246,26 +343,32 @@ struct RootView: View {
     }
 
     private func saveWindowFrame(for accountID: UUID?, window: NSWindow? = NSApp.keyWindow) {
-        guard settings.rememberWindowSize, let accountID, let window else { return }
+        guard settings.rememberWindowSize, preDockWindowFrame == nil,
+              let accountID, let window else { return }
         UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: "facebook.window.\(accountID)")
     }
 
-    private func removeSessionWhenAvailable(for account: FacebookAccount, retries: Int = 2) {
+    private func removeSessionWhenAvailable(
+        for account: FacebookAccount,
+        retries: Int = 2,
+        completion: @escaping () -> Void = {}
+    ) {
         FacebookSessionService.removeSession(for: account) { error in
-            guard error != nil, retries > 0 else { return }
+            guard error != nil, retries > 0 else {
+                completion()
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                removeSessionWhenAvailable(for: account, retries: retries - 1)
+                removeSessionWhenAvailable(for: account, retries: retries - 1, completion: completion)
             }
         }
     }
 
     private var keyboardShortcuts: some View {
         HStack {
-            Button("") { route = .summary }.keyboardShortcut("j", modifiers: .command)
-            Button("") { route = .draft }.keyboardShortcut("k", modifiers: .command)
+            Button("") { activateTool(.summarize) }.keyboardShortcut("j", modifiers: .command)
+            Button("") { activateTool(.draft) }.keyboardShortcut("k", modifiers: .command)
             Button("") { facebook.reload() }.keyboardShortcut("r", modifiers: .command)
-            Button("") { Task { toolMessage = await facebook.togglePictureInPicture() } }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
             Button("") { sidebarHidden.toggle() }.keyboardShortcut("s", modifiers: [.command, .option])
         }
         .frame(width: 0, height: 0).opacity(0)

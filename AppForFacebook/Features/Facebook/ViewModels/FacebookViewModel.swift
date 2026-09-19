@@ -68,7 +68,23 @@ final class FacebookViewModel: ObservableObject {
     func setCurrentURL(_ url: URL?) {
         guard let url else { return }
         if currentURL != url { currentURL = url }
-        UserDefaults.standard.set(url.absoluteString, forKey: "facebook.lastURL")
+        // Login, checkpoint, and two-step URLs contain short-lived state (and in
+        // some cases one-time encrypted context). Restoring one on the next launch
+        // makes Facebook reject it as an invalid request.
+        if Self.restorableURL(url) != nil {
+            UserDefaults.standard.set(url.absoluteString, forKey: "facebook.lastURL")
+        }
+    }
+
+    static func restorableURL(_ url: URL) -> URL? {
+        guard let host = url.host?.lowercased(),
+              host == "facebook.com" || host.hasSuffix(".facebook.com") else { return nil }
+        let path = url.path.lowercased()
+        guard !path.hasPrefix("/login"),
+              !path.hasPrefix("/checkpoint"),
+              !path.hasPrefix("/two_step_verification"),
+              !path.hasPrefix("/privacy/consent") else { return nil }
+        return url
     }
 
     func updateAccount(name: String?, avatarURL: URL?) {
@@ -86,6 +102,7 @@ final class FacebookViewModel: ObservableObject {
 
     func updateLoginState(_ signedIn: Bool) {
         if isLoggedIn != signedIn { isLoggedIn = signedIn }
+        if !signedIn, !unreadCounts.isEmpty { unreadCounts = [:] }
         // A missing cookie while Facebook is navigating or refreshing is not proof that
         // previously extracted identity data is invalid. Keep it until accounts switch.
     }
@@ -165,35 +182,6 @@ final class FacebookViewModel: ObservableObject {
         return ReadableArticle(title: result["title"] as? String ?? "Reader",
                                text: String(text.prefix(40_000)),
                                sourceURL: (result["url"] as? String).flatMap(URL.init(string:)))
-    }
-
-    func togglePictureInPicture() async -> String {
-        guard let webView else { return "Facebook is not available." }
-        let script = #"""
-        (() => {
-          const videos = [...document.querySelectorAll('video')].filter(v => v.readyState > 0);
-          const video = videos.find(v => !v.paused) || videos.sort((a,b) => (b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight))[0];
-          if (!video) return 'noVideo';
-          try {
-            if (video.webkitPresentationMode === 'picture-in-picture') {
-              video.webkitSetPresentationMode('inline'); return 'closed';
-            }
-            if (typeof video.webkitSetPresentationMode === 'function') {
-              video.webkitSetPresentationMode('picture-in-picture'); video.play(); return 'opened';
-            }
-            return 'unsupported';
-          } catch (_) { return 'unsupported'; }
-        })()
-        """#
-        let result: String = await withCheckedContinuation { continuation in
-            webView.evaluateJavaScript(script) { value, _ in continuation.resume(returning: value as? String ?? "unsupported") }
-        }
-        switch result {
-        case "opened": return "Picture-in-Picture started."
-        case "closed": return "Picture-in-Picture closed."
-        case "noVideo": return "Play a Facebook video, then try Picture-in-Picture again."
-        default: return "This video does not support Picture-in-Picture."
-        }
     }
 
 }

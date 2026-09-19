@@ -17,6 +17,8 @@ struct SidebarView: View {
     let activateTool: (SidebarTool) -> Void
     let selectedTool: SidebarTool?
     let unreadCounts: [FacebookDestination: Int]
+    let isPremium: Bool
+    let onUpgrade: () -> Void
 
     var body: some View {
         ViewThatFits(in: .vertical) {
@@ -145,11 +147,9 @@ struct SidebarView: View {
             .clipShape(RoundedRectangle(cornerRadius: 7))
 
             menuDivider
-            accountMenuButton("Dock beside current", systemImage: "rectangle.split.2x1") {
+            // Side-by-side panels is a Premium feature.
+            accountMenuButton("Dock beside current", systemImage: "rectangle.split.2x1", locked: !isPremium) {
                 dockBesideCurrent()
-            }
-            accountMenuButton("Open in PiP", systemImage: "pip") {
-                activateTool(.pictureInPicture)
             }
             accountMenuButton("Notes for this account", systemImage: "note.text") {
                 show(.notes)
@@ -172,7 +172,7 @@ struct SidebarView: View {
 
     private func accountSubtitle(_ account: FacebookAccount) -> String {
         var subtitle = "Facebook"
-        if account.id == accounts.activeID,
+        if account.id == accounts.activeID, isLoggedIn,
            let total = unreadCounts.values.reduce(0, +) as Int?, total > 0 {
             subtitle += " · \(total) unread"
         }
@@ -183,7 +183,7 @@ struct SidebarView: View {
         Divider().padding(.horizontal, 4).padding(.vertical, 7)
     }
 
-    private func accountMenuButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func accountMenuButton(_ title: String, systemImage: String, locked: Bool = false, action: @escaping () -> Void) -> some View {
         Button {
             menuAccountID = nil
             action()
@@ -194,6 +194,11 @@ struct SidebarView: View {
                     .frame(width: 18)
                 Text(title).font(.system(size: 13))
                 Spacer(minLength: 0)
+                if locked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.facebookBlue)
+                }
             }
             .padding(.horizontal, 8)
             .frame(height: 37)
@@ -249,7 +254,8 @@ struct SidebarView: View {
             ForEach(SidebarTool.allCases) { tool in
                 sidebarButton(tool.title, icon: tool.icon, systemIcon: tool.usesSystemIcon,
                               selected: selectedTool == tool,
-                              shortcut: toolShortcut(for: tool)) { activateTool(tool) }
+                              shortcut: toolShortcut(for: tool),
+                              locked: tool.isPremium && !isPremium) { activateTool(tool) }
             }
         }
     }
@@ -262,21 +268,28 @@ struct SidebarView: View {
         switch tool {
         case .summarize: "⌘J"
         case .draft: "⌘K"
-        case .pictureInPicture: "⌘⇧P"
-        case .templates, .reader, .notebook, .sidebar, .settings: nil
+        case .templates, .reader, .notebook, .subscription, .sidebar, .settings: nil
         }
     }
 
-    private func sidebarButton(_ title: String, icon: String, systemIcon: Bool = false, selected: Bool = false, shortcut: String? = nil, action: @escaping () -> Void) -> some View {
+    private func sidebarButton(_ title: String, icon: String, systemIcon: Bool = false, selected: Bool = false, shortcut: String? = nil, locked: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                (systemIcon ? Image(systemName: icon) : Image(icon))
-                    .renderingMode(.template)
-                    .foregroundStyle(selected ? Color.accentBlue : .secondary)
-                    .frame(width: 20)
+                ZStack(alignment: .bottomTrailing) {
+                    (systemIcon ? Image(systemName: icon) : Image(icon))
+                        .renderingMode(.template)
+                        .foregroundStyle(selected ? Color.accentBlue : .secondary)
+                        .frame(width: 20)
+                    if locked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Color.facebookBlue)
+                            .offset(x: 7, y: 2)
+                    }
+                }
                 if showLabels {
                     Text(title)
-                        .font(.system(size: title == "Picture-in-Picture" ? 12 : 13))
+                        .font(.system(size: 13))
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
                     Spacer()
