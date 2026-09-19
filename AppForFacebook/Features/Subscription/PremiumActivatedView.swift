@@ -19,7 +19,7 @@ struct PremiumActivatedView: View {
 
             VStack(spacing: 0) {
                 ZStack {
-                    Image("AppIcon")
+                    Image("AppLogo")
                         .resizable()
                         .scaledToFit()
                         .frame(width: 54, height: 54)

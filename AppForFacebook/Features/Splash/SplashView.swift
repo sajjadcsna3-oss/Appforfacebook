@@ -32,7 +32,7 @@ struct SplashView: View {
                         )
                         .frame(width: 122, height: 122)
 
-                    Image("AppIcon")
+                    Image("AppLogo")
                         .font(.system(size: 55, weight: .semibold))
                         .foregroundStyle(.white)
                 }
@@ -68,4 +68,3 @@ struct SplashView: View {
         }
     }
 }
-

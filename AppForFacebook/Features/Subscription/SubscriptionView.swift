@@ -225,7 +225,7 @@ struct SubscriptionView: View {
 
         VStack(spacing: 0) {
 
-            Image("AppIcon")
+            Image("AppLogo")
                 .resizable()
                 .scaledToFit()
                 .frame(
