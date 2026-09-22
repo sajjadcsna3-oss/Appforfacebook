@@ -1,10 +1,25 @@
 import Foundation
 
-struct GroqService {
+protocol AICompletionService: Sendable {
+    func complete(system: String, prompt: String, temperature: Double) async throws -> String
+}
+
+struct GroqService: AICompletionService {
     static let keychainService = "com.Sajjad.project.NorthwindSocial1.groq"
     static let keychainAccount = "api-key"
-    private let endpoint = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
-    private let model = "openai/gpt-oss-20b"
+    private let endpoint: URL
+    private let model: String
+    private let session: URLSession
+
+    init(
+        endpoint: URL = URL(string: "https://api.groq.com/openai/v1/chat/completions")!,
+        model: String = "openai/gpt-oss-20b",
+        session: URLSession = .shared
+    ) {
+        self.endpoint = endpoint
+        self.model = model
+        self.session = session
+    }
 
     func complete(system: String, prompt: String, temperature: Double = 0.45) async throws -> String {
         guard let apiKey = KeychainSecret.read(service: Self.keychainService, account: Self.keychainAccount), !apiKey.isEmpty else {
@@ -21,7 +36,7 @@ struct GroqService {
             throw GroqError.requestEncoding(error.localizedDescription)
         }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw GroqError.invalidResponse }
             guard (200..<300).contains(http.statusCode) else {
                 let message = (try? JSONDecoder().decode(APIErrorEnvelope.self, from: data).error.message) ?? "Groq returned HTTP \(http.statusCode)."

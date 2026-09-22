@@ -9,22 +9,26 @@ final class FacebookAccountsViewModel: ObservableObject {
     static let accountsStorageKey = "facebook.accounts.v4"
     private let accountsKey = FacebookAccountsViewModel.accountsStorageKey
     private let activeKey = "facebook.activeAccount.v4"
+    private let defaults: UserDefaults
+    private let store: CodableStore
     static var hasSavedAccounts: Bool {
         guard let data = UserDefaults.standard.data(forKey: accountsStorageKey) else { return false }
         return (try? JSONDecoder().decode([FacebookAccount].self, from: data))?.isEmpty == false
     }
     
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        store = CodableStore(defaults: defaults)
         var shouldSave = false
-        if let data = UserDefaults.standard.data(forKey: accountsKey) {
+        if let data = store.rawData(forKey: accountsKey) {
             do {
-                accounts = try JSONDecoder().decode([FacebookAccount].self, from: data)
+                accounts = try store.load(forKey: accountsKey) ?? []
             } catch {
                 // Keep the unreadable payload intact so a future migration or support build
                 // can recover it before normal use writes a fresh account list.
                 let recoveryKey = "\(accountsKey).recovery"
-                if UserDefaults.standard.data(forKey: recoveryKey) == nil {
-                    UserDefaults.standard.set(data, forKey: recoveryKey)
+                if store.rawData(forKey: recoveryKey) == nil {
+                    store.setRawData(data, forKey: recoveryKey)
                 }
                 persistenceWarning = "Saved account information could not be read. A recovery copy was preserved."
                 accounts = []
@@ -40,7 +44,7 @@ final class FacebookAccountsViewModel: ObservableObject {
                 shouldSave = true
             }
         }
-        activeID = UserDefaults.standard.string(forKey: activeKey).flatMap(UUID.init(uuidString:))
+        activeID = defaults.string(forKey: activeKey).flatMap(UUID.init(uuidString:))
         if active == nil { activeID = accounts.first?.id }
        
         for index in accounts.indices where accounts[index].sessionID == nil && accounts[index].id != activeID {
@@ -93,7 +97,7 @@ final class FacebookAccountsViewModel: ObservableObject {
     }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(accounts) { UserDefaults.standard.set(data, forKey: accountsKey) }
-        UserDefaults.standard.set(activeID?.uuidString, forKey: activeKey)
+        try? store.save(accounts, forKey: accountsKey)
+        defaults.set(activeID?.uuidString, forKey: activeKey)
     }
 }

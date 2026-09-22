@@ -3,15 +3,19 @@ import Foundation
 
 @MainActor
 final class TemplatesViewModel: ObservableObject {
-    @Published var templates: [TextTemplate] = []
+    @Published private(set) var templates: [TextTemplate] = []
     @Published var search = ""
     @Published var title = ""
     @Published var body = ""
     @Published var editingID: UUID?
     @Published var message: String?
     private let storageKey = "facebook.textTemplates"
+    private let store: CodableStore
 
-    init() { load() }
+    init(store: CodableStore? = nil) {
+        self.store = store ?? CodableStore()
+        load()
+    }
 
     var filtered: [TextTemplate] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -36,9 +40,18 @@ final class TemplatesViewModel: ObservableObject {
         if editingID == template.id { resetEditor() }
         persist()
     }
-    func insert(_ template: TextTemplate, into browser: FacebookViewModel) async {
+    func insert(_ template: TextTemplate, into browser: any FacebookTextInserting) async {
         message = await browser.insert(text: template.body) ? "Inserted into Facebook." : "Select a Facebook text field first."
     }
-    private func load() { if let data = UserDefaults.standard.data(forKey: storageKey), let saved = try? JSONDecoder().decode([TextTemplate].self, from: data) { templates = saved } }
-    private func persist() { UserDefaults.standard.set(try? JSONEncoder().encode(templates), forKey: storageKey) }
+    private func load() {
+        templates = (try? store.load(forKey: storageKey)) ?? []
+    }
+
+    private func persist() {
+        do {
+            try store.save(templates, forKey: storageKey)
+        } catch {
+            message = "Templates could not be saved: \(error.localizedDescription)"
+        }
+    }
 }

@@ -8,9 +8,16 @@ final class ReaderViewModel: ObservableObject {
     @Published var article: ReadableArticle?
     @Published var fontSize: Double = 17
 
-    func load(from browser: FacebookViewModel) async {
+    func load(from browser: any FacebookContentProviding) async {
         state = .loading
-        do { article = try await browser.readableArticle(); state = .loaded }
+        do {
+            let loadedArticle = try await browser.readableArticle()
+            try Task.checkCancellation()
+            article = loadedArticle
+            state = .loaded
+        } catch is CancellationError {
+            state = .loading
+        }
         catch FacebookBrowserError.noReadableContent { state = .empty }
         catch { state = .failed(error.localizedDescription) }
     }

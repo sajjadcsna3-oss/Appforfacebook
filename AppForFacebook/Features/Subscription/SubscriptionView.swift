@@ -102,10 +102,11 @@ struct SubscriptionView: View {
             )
         }
         .task {
-
-            if storeKit.products.isEmpty {
-                await storeKit.loadProducts()
-            }
+            // Product metadata can change in App Store Connect while the app
+            // is running. Fetch again whenever the paywall is presented so a
+            // previously loaded Product does not keep an outdated price for
+            // the lifetime of this app process.
+            await storeKit.loadProducts()
         }
     }
 
@@ -889,6 +890,22 @@ struct SubscriptionView: View {
 
             Spacer()
 
+            Link(
+                "Privacy",
+                destination: URL(
+                    string: "https://sites.google.com/view/app-for-netflix/privacy-policy"
+                )!
+            )
+            .foregroundStyle(Color.white.opacity(0.62))
+
+            Link(
+                "Terms",
+                destination: URL(
+                    string: "https://sites.google.com/view/app-for-netflix/terms-of-use"
+                )!
+            )
+            .foregroundStyle(Color.white.opacity(0.62))
+
             Button("Restore purchase") {
 
                 Task {
@@ -936,6 +953,14 @@ struct SubscriptionView: View {
                     Text(error)
                         .font(.system(size: 9))
                         .foregroundStyle(.red)
+
+                    Button("Retry loading prices") {
+                        Task { await storeKit.loadProducts() }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(figmaBlue)
+                    .disabled(storeKit.isLoadingProducts)
                 }
             }
             .offset(y: -16)

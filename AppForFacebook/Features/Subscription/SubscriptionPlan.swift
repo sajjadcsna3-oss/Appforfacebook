@@ -21,15 +21,15 @@ enum SubscriptionPlan: String, CaseIterable, Identifiable {
         }
     }
 
-    // Replace with the exact IDs created in App Store Connect.
+    /// The Product ID configured in StoreProducts.plist.
     var productID: String {
         switch self {
         case .monthly:
-            "com.yourcompany.appforfacebook.premium.monthly"
+            StoreConfiguration.monthlyProductID
         case .annual:
-            "com.yourcompany.appforfacebook.premium.annual"
+            StoreConfiguration.annualProductID
         case .lifetime:
-            "com.yourcompany.appforfacebook.premium.lifetime"
+            StoreConfiguration.lifetimeProductID
         }
     }
 
@@ -41,4 +41,3 @@ enum SubscriptionPlan: String, CaseIterable, Identifiable {
         }
     }
 }
-

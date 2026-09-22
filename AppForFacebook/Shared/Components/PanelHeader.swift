@@ -7,3 +7,7 @@ struct PanelHeader: View {
         HStack(spacing: 10) { Image(icon).foregroundStyle(Color.facebookBlue); Text(title).font(.title3.bold()); Spacer() }
     }
 }
+
+
+
+

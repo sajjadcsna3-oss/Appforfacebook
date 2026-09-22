@@ -117,6 +117,13 @@ struct SettingsView: View {
         case .privacy:
             settingsCard("Privacy", icon: "Privacy", description: "Facebook credentials stay on facebook.com. WebKit stores each account's cookies in its own persistent session.") {
                 Label("Passwords never pass through this app", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
+                Divider()
+                Link(destination: URL(string: "https://sites.google.com/view/app-for-netflix/privacy-policy")!) {
+                    Label("Privacy Policy", systemImage: "arrow.up.right.square")
+                }
+                Link(destination: URL(string: "https://sites.google.com/view/app-for-netflix/terms-of-use")!) {
+                    Label("Terms of Use", systemImage: "arrow.up.right.square")
+                }
             }
         case .shortcuts:
             settingsCard("Keyboard shortcuts", icon: "ShortcutsIcon", description: "Quick actions available from the Facebook window.") {

@@ -44,15 +44,34 @@ final class StoreKitService: ObservableObject {
     }
 
     func loadProducts() async {
+        guard !isLoadingProducts else { return }
+
         isLoadingProducts = true
+        errorMessage = nil
         defer { isLoadingProducts = false }
 
         do {
-            products = try await Product.products(
-                for: SubscriptionPlan.allCases.map(\.productID)
-            )
+            let requestedIDs = Set(SubscriptionPlan.allCases.map(\.productID))
+
+            guard !requestedIDs.contains("") else {
+                products = []
+                errorMessage = "The App Store product IDs are missing from the app bundle."
+                return
+            }
+
+            let fetchedProducts = try await Product.products(for: requestedIDs)
+            products = fetchedProducts.sorted { $0.id < $1.id }
+
+            let returnedIDs = Set(fetchedProducts.map(\.id))
+            let missingIDs = requestedIDs.subtracting(returnedIDs).sorted()
+            if !missingIDs.isEmpty {
+                errorMessage = "The App Store did not return: \(missingIDs.joined(separator: ", ")). Check that these exact IDs belong to bundle \(Bundle.main.bundleIdentifier ?? "unknown") and are available for sale."
+            }
         } catch {
-            errorMessage = "Unable to load App Store products."
+            // Keep the last successfully loaded products visible if a refresh
+            // fails. A temporary App Store/network failure should not replace
+            // valid prices with placeholders.
+            errorMessage = "Unable to load App Store products: \(error.localizedDescription)"
         }
     }
 

@@ -3,7 +3,7 @@ import Foundation
 import WebKit
 
 @MainActor
-final class FacebookViewModel: ObservableObject {
+final class FacebookViewModel: ObservableObject, FacebookContentProviding, FacebookTextInserting {
     static let homeURL = FacebookDestination.home.url
 
     @Published private(set) var currentURL = homeURL

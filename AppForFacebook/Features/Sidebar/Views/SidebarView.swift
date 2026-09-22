@@ -68,6 +68,51 @@ struct SidebarView: View {
         }
     }
 
+    private var subscriptionButton: some View {
+        Button(action: onUpgrade) {
+            HStack(spacing: 8) {
+                Image("workspace_premium")
+                    .renderingMode(.template)
+                    .foregroundStyle(Color(red: 0.89, green: 0.69, blue: 0.28))
+                    .frame(width: 20)
+
+                if showLabels {
+                    Text("Subscription")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .layoutPriority(1)
+
+                    Spacer(minLength: 2)
+
+                    Text("PRO")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color(red: 0.18, green: 0.14, blue: 0.07))
+                        .padding(.horizontal, 7)
+                        .frame(height: 22)
+                        .background(Color(red: 0.96, green: 0.74, blue: 0.30))
+                        .clipShape(Capsule())
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.89, green: 0.69, blue: 0.28))
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
+            .background(Color(red: 0.20, green: 0.16, blue: 0.08).opacity(0.62))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(red: 0.58, green: 0.42, blue: 0.13), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(showLabels ? "" : "Subscription")
+    }
+
     private var accountList: some View {
         LazyVStack(alignment: .leading, spacing: 4) {
             ForEach(availableAccounts) { account in
@@ -251,11 +296,14 @@ struct SidebarView: View {
     private var tools: some View {
         VStack(alignment: .leading, spacing: 3) {
             sectionTitle("TOOLS")
-            ForEach(SidebarTool.allCases) { tool in
+            ForEach(SidebarTool.allCases.filter { $0 != .subscription }) { tool in
                 sidebarButton(tool.title, icon: tool.icon, systemIcon: tool.usesSystemIcon,
                               selected: selectedTool == tool,
                               shortcut: toolShortcut(for: tool),
                               locked: tool.isPremium && !isPremium) { activateTool(tool) }
+            }
+            if !isPremium {
+                subscriptionButton
             }
         }
     }

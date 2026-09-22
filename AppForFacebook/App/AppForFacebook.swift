@@ -9,6 +9,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               event.eventID == kAEOpenApplication else { return }
         launchedAsLoginItem = event.paramDescriptor(forKeyword: AEKeyword(keyAELaunchedAsLogInItem)) != nil
     }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+              let icon = NSImage(contentsOf: iconURL) else { return }
+        NSApp.applicationIconImage = icon
+    }
 }
 
 @main
@@ -26,15 +32,17 @@ struct AppForFacebookApp: App {
                 switch launch.phase {
                 case .splash:
                     SplashView(progress: launch.progress)
+                case .onboarding:
+                    FacebookChooserView(openFacebook: launch.completeOnboarding)
                 case .main:
-                    RootView(settings: settings)
+                    RootView(settings: settings, startInBrowser: true)
                         .environmentObject(storeKit)
                         .environmentObject(subscriptionFlow)
                 }
 
                 // Paywall / post-purchase overlay, reusing the existing
                 // subscription views and StoreKit entitlement state.
-                if let screen = subscriptionFlow.screen {
+                if launch.phase == .main, let screen = subscriptionFlow.screen {
                     switch screen {
                     case .paywall:
                         SubscriptionView(
@@ -52,7 +60,9 @@ struct AppForFacebookApp: App {
                     }
                 }
             }
-            .task { await launch.start(storeKit: storeKit) }
+            .task {
+                _ = await launch.start(storeKit: storeKit)
+            }
             .onChange(of: storeKit.entitlementState) { oldState, state in
                 if oldState != .premium,
                    state == .premium,

@@ -16,10 +16,14 @@ struct RootView: View {
     @State private var clearingSessionAccountID: UUID?
     @State private var webViewGeneration = UUID()
     @State private var preDockWindowFrame: NSRect?
+    private let localDataStore = AccountLocalDataStore()
+    private let windowFrameStore = WindowFrameStore()
 
-    init(settings: SettingsViewModel) {
+    init(settings: SettingsViewModel, startInBrowser: Bool = false) {
         self.settings = settings
-        _isBrowserOpen = State(initialValue: FacebookAccountsViewModel.hasSavedAccounts)
+        _isBrowserOpen = State(
+            initialValue: startInBrowser || FacebookAccountsViewModel.hasSavedAccounts
+        )
     }
 
     private var isPremium: Bool { storeKit.entitlementState == .premium }
@@ -30,7 +34,7 @@ struct RootView: View {
             else { FacebookChooserView(openFacebook: openFacebook) }
         }
         .preferredColorScheme(.dark)
-        .frame(minWidth: 760, minHeight: 620)
+        .frame(minWidth: 1200, minHeight: 800)
     }
 
     private var mainContent: some View {
@@ -195,7 +199,7 @@ struct RootView: View {
         if wasActive { facebook.resetForAccount() }
 
         accounts.remove(account)
-        removeLocalData(for: account)
+        localDataStore.removeData(for: account.id)
         if settings.startupAccountID == account.id {
             settings.startupAccountID = accounts.activeID
         }
@@ -205,8 +209,9 @@ struct RootView: View {
         }
 
         // Removing the view first releases its data store, as required by WebKit.
-        DispatchQueue.main.async {
-            removeSessionWhenAvailable(for: account)
+        Task {
+            await Task.yield()
+            await FacebookSessionService.removeSession(for: account, retries: 2)
         }
     }
 
@@ -251,27 +256,26 @@ struct RootView: View {
         facebook.resetForAccount()
 
         // Clear the Facebook session, then remove this account from the rail.
-        removeSessionWhenAvailable(for: account) {
-            DispatchQueue.main.async {
-                removeLocalData(for: account)
+        Task {
+            await FacebookSessionService.removeSession(for: account, retries: 2)
+            localDataStore.removeData(for: account.id)
 
-                if settings.startupAccountID == account.id {
-                    settings.startupAccountID = nil
+            if settings.startupAccountID == account.id {
+                settings.startupAccountID = nil
+            }
+
+            accounts.remove(account)
+            clearingSessionAccountID = nil
+            webViewGeneration = UUID()
+            selectedTab = .home
+
+            if let nextAccount = accounts.active {
+                if settings.startupAccountID == nil {
+                    settings.startupAccountID = nextAccount.id
                 }
-
-                accounts.remove(account)
-                clearingSessionAccountID = nil
-                webViewGeneration = UUID()
-                selectedTab = .home
-
-                if let nextAccount = accounts.active {
-                    if settings.startupAccountID == nil {
-                        settings.startupAccountID = nextAccount.id
-                    }
-                    facebook.navigate(to: FacebookViewModel.homeURL)
-                } else {
-                    isBrowserOpen = false
-                }
+                facebook.navigate(to: FacebookViewModel.homeURL)
+            } else {
+                isBrowserOpen = false
             }
         }
     }
@@ -288,6 +292,7 @@ struct RootView: View {
 
     private func applyStartupSettings() {
         guard isBrowserOpen else { return }
+        accounts.ensureAccount()
         DispatchQueue.main.async { restoreWindowFrame(for: accounts.activeID) }
         let destination: URL
         switch settings.startup {
@@ -316,52 +321,16 @@ struct RootView: View {
         restoreWindowFrame(for: newID, window: window)
     }
 
-    private func removeLocalData(for account: FacebookAccount) {
-        let accountID = account.id.uuidString
-        let defaults = UserDefaults.standard
-        defaults.removeObject(forKey: "facebook.window.\(accountID)")
-        defaults.removeObject(forKey: "facebook.notebook.\(accountID)")
-        defaults.removeObject(forKey: "facebook.notes.\(accountID)")
-    }
-
     private func restoreWindowFrame(for accountID: UUID?, window: NSWindow? = NSApp.keyWindow) {
         guard settings.rememberWindowSize, let window, let accountID,
-              let saved = UserDefaults.standard.string(forKey: "facebook.window.\(accountID)") else { return }
-        let frame = NSRectFromString(saved)
-        guard frame.width > 500, frame.height > 400 else { return }
-        let visibleFrames = NSScreen.screens.map(\.visibleFrame)
-        if visibleFrames.contains(where: { $0.intersects(frame) }) {
-            window.setFrame(frame, display: true, animate: true)
-        } else if let screen = window.screen ?? NSScreen.main {
-            var adjusted = frame
-            adjusted.size.width = min(adjusted.width, screen.visibleFrame.width)
-            adjusted.size.height = min(adjusted.height, screen.visibleFrame.height)
-            adjusted.origin.x = screen.visibleFrame.midX - adjusted.width / 2
-            adjusted.origin.y = screen.visibleFrame.midY - adjusted.height / 2
-            window.setFrame(adjusted, display: true, animate: false)
-        }
+              let frame = windowFrameStore.restoreFrame(for: accountID, on: NSScreen.screens) else { return }
+        window.setFrame(frame, display: true, animate: true)
     }
 
     private func saveWindowFrame(for accountID: UUID?, window: NSWindow? = NSApp.keyWindow) {
         guard settings.rememberWindowSize, preDockWindowFrame == nil,
               let accountID, let window else { return }
-        UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: "facebook.window.\(accountID)")
-    }
-
-    private func removeSessionWhenAvailable(
-        for account: FacebookAccount,
-        retries: Int = 2,
-        completion: @escaping () -> Void = {}
-    ) {
-        FacebookSessionService.removeSession(for: account) { error in
-            guard error != nil, retries > 0 else {
-                completion()
-                return
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                removeSessionWhenAvailable(for: account, retries: retries - 1, completion: completion)
-            }
-        }
+        windowFrameStore.save(frame: window.frame, for: accountID)
     }
 
     private var keyboardShortcuts: some View {

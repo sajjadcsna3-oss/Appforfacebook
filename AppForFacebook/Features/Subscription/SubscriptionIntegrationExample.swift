@@ -22,11 +22,14 @@ struct AppSubscriptionContainer<MainContent: View>: View {
             case .splash:
                 SplashView(progress: launch.progress)
 
+            case .onboarding:
+                FacebookChooserView(openFacebook: launch.completeOnboarding)
+
             case .main:
                 mainContent(storeKit, subscriptionFlow)
             }
 
-            if let screen = subscriptionFlow.screen {
+            if launch.phase == .main, let screen = subscriptionFlow.screen {
                 switch screen {
                 case .paywall:
                     SubscriptionView(
@@ -61,7 +64,7 @@ struct AppSubscriptionContainer<MainContent: View>: View {
             }
         }
         .task {
-            await launch.start(storeKit: storeKit)
+            _ = await launch.start(storeKit: storeKit)
         }
     }
 }
